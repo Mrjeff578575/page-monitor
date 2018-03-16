@@ -8,10 +8,20 @@ var DEFAULT_DATA_DIRNAME = process.cwd();
 var PHANTOMJS_SCRIPT_DIR = path.join(__dirname, 'phantomjs');
 var PHANTOMJS_SCRIPT_FILE = path.join(PHANTOMJS_SCRIPT_DIR, 'index.js');
 var _ = require('./util.js');
+var EventEmitter = require('./NewEventEmitter.js');
 var _exists = fs.existsSync || path.existsSync;
-var phantomjs = require('phantomjs');
-var binPath = phantomjs.path;
+const puppeteer = require('puppeteer');
+const M = require('./phantomjs/index.js');
 
+/**
+ * log
+ * @param {string} msg
+ * @param {number} type
+ */
+function log(msg, type) {
+    type = type || _.log.DEBUG;
+    console.log(type + msg);
+};
 /**
  * mkdir -p
  * @param {String} path
@@ -58,22 +68,13 @@ function base64(data){
  */
 function mergeSettings(settings){
     var defaultSettings = {
-        // remove phantomejs application cache before capture
-        // @see https://github.com/fouber/page-monitor/issues/3
-        cleanApplicationCache: false,
-        // phantom cli options
-        // @see http://phantomjs.org/api/command-line.html
-        cli: {
-            '--max-disk-cache-size' : '0',
-            '--disk-cache' : 'false',
-            '--ignore-ssl-errors' : 'yes'
-        },
         // webpage settings
-        // @see http://phantomjs.org/api/webpage/
+        // @see https://github.com/GoogleChrome/puppeteer/blob/master/docs/api.md#pagesetviewportviewport
         page: {
-            viewportSize: {
-                width: 320,
-                height: 568
+            viewportOpts: {
+                width: 375,
+                height: 667,
+                isMobile: true,
             },
             settings: {
                 resourceTimeout: 20000,
@@ -167,13 +168,6 @@ function mergeSettings(settings){
                  */
             }
         },
-        render: {
-            format: 'jpeg',     // @see http://phantomjs.org/api/webpage/method/render.html
-            quality: 80,        // @see http://phantomjs.org/api/webpage/method/render.html
-            ext: 'jpg',         // the same as format, if not specified
-            delay: 1000,        // delay(ms) before screenshot.
-            timeout: 60 * 1000  // render timeout, max waiting time
-        },
         path: {
             root: DEFAULT_DATA_DIRNAME, // data and screenshot save path root
 
@@ -249,203 +243,167 @@ var logTypes = (function(){
 var LOG_SPLIT_REG = new RegExp('(?:^|[\r\n]+)(?=' + logTypes + ')');
 var LOG_TYPE_REG = new RegExp('^(' + logTypes + ')');
 
-/**
- * why not events.EventEmitter?
- * because it can NOT emit an 'error' event,
- * but i need, fuck off.
- * @constructor
- */
-var EventEmitter = function(){
-    this._listeners = {};
-};
-
-/**
- * add event listener
- * @param {string} type
- * @param {Function} callback
- */
-EventEmitter.prototype.on = function(type, callback){
-    if(!this._listeners.hasOwnProperty(type)){
-        this._listeners[type] = [];
-    }
-    this._listeners[type].push(callback);
-};
-
-/**
- * remove event listener
- * @param {string} type
- * @param {Function} callback
- */
-EventEmitter.prototype.off = function(type, callback){
-    if(this._listeners.hasOwnProperty(type)){
-        var listeners = [];
-        for(var i = 0, len = this._listeners[type].length; i < len; i++){
-            var listener = this._listeners[type][i];
-            if(listener !== callback){
-                listeners.push(listener);
-            }
+class Monitor {
+    /**
+     * Monitor Class Constructor
+     * @param {String} url
+     * @param {Object} options
+     * @constructor
+    */
+    constructor(options) {
+        EventEmitter.call(this);
+        options = mergeSettings(options);
+        this.url = options.url;
+        this.running = false;
+        options.path.dir = path.join(
+            options.path.root || DEFAULT_DATA_DIRNAME,
+            format(options.path.format, options.url, Url.parse(options.url))
+        );
+        if(!fs.existsSync(options.path.dir)){
+            mkdirp(options.path.dir);
         }
-        this._listeners[type] = listeners;
+        this.options = options;
+        this._initLog();
     }
-};
-
-/**
- * dispatch event
- * @param {string} type
- */
-EventEmitter.prototype.emit = function(type){
-    if(this._listeners.hasOwnProperty(type)){
-        var args = [].splice.call(arguments, 1);
-        var self = this;
-        this._listeners[type].forEach(function(callback){
-            callback.apply(self, args);
+    /**
+     * init log
+     * @private
+     */
+    _initLog() {
+        var log = this.log = {};
+        _.map(_.log, function(key){
+            log[key.toLowerCase()] = [];
         });
     }
-};
 
-/**
- * Monitor Class Constructor
- * @param {String} url
- * @param {Object} options
- * @constructor
- */
-var Monitor = function(url, options){
-    EventEmitter.call(this);
-    options = mergeSettings(options);
-    this.url = options.url = url;
-    this.running = false;
-    options.path.dir = path.join(
-        options.path.root || DEFAULT_DATA_DIRNAME,
-        format(options.path.format, url, Url.parse(url))
-    );
-    if(!fs.existsSync(options.path.dir)){
-        mkdirp(options.path.dir);
+    /**
+     * capture webpage and diff
+     * @param {Function} callback
+     * @param {Boolean} noDiff
+     * @returns {*}
+     */
+    capture(callback, noDiff) {
+        if(this.running) return;
+        this.running = true;
+        var self = this;
+        var type = _.mode.CAPTURE;
+        if(!noDiff){
+            type |= _.mode.DIFF;
+        }
+        this._initLog();
+        return this.run(
+            [
+                type,
+                this.url,
+                JSON.stringify(this.options)
+            ],
+            function(code, log){
+                // TODO with code
+                self.running = false;
+                callback.call(self, code, log);
+            }
+        );
     }
-    this.options = options;
-    this._initLog();
-};
+
+
+    /**
+     * diff with two times
+     * @param {Number|String|Date} left
+     * @param {Number|String|Date} right
+     * @param {Function} callback
+     * @returns {*}
+     */
+    diff(left, right, callback) {
+        if(this.running) return;
+        this.running = true;
+        var self = this;
+        var type = _.mode.DIFF;
+        this._initLog();
+        return this.run( 
+            [
+                type, 
+                left, 
+                right,
+                JSON.stringify(this.options)
+            ],
+            function(code, log){
+                self.running = false;
+                callback.call(self, code, log);
+            }
+        );
+    }
+
+    /**
+     * spawn phantom
+     * @param {Array} args
+     * @param {Function} callback
+     * @returns {*}
+     * @private
+     */
+    async run(args, callback){
+        var arr = [];
+        // _.map(this.options.cli, function(key, value){
+        //     arr.push(key + '=' + value);
+        // });
+        arr = arr.concat(args);
+        const mode = parseInt(args[0]);
+        log('mode: ' + mode.toString(2));
+        puppeteer.launch().then(async browser => {
+            if(mode & _.mode.CAPTURE){ 
+                // capture
+                let m = new M(JSON.parse(args[2]), browser);
+                m.capture(args[1], (mode & _.mode.DIFF) > 0);
+            } else if(mode & _.mode.DIFF){ 
+                // diff only
+                let m = new M(JSON.parse(args[3]), browser);
+                m.diff(args[1], args[2]);
+            }
+        });
+
+        
+        //const childProcess = await browser.process();
+        // try {
+        //     const childProcess = spawn(PHANTOMJS_SCRIPT_FILE, arr);
+        //     childProcess.stdout.on('data', this._parseLog.bind(this));
+        //     childProcess.stderr.on('data', this._parseLog.bind(this));
+        //     childProcess.on('exit', function(code){
+        //         callback(code);
+        //     });
+        //     return childProcess;
+        // } catch(e) {
+        //     console.log(e)
+        // }
+
+    
+    };
+
+    /**
+     * parse log from phantom
+     * @param {String} msg
+     * @private
+     */
+    _parseLog(msg) {
+        var self = this;
+        String(msg || '').split(LOG_SPLIT_REG).forEach(function(item){
+            item = item.trim();
+            if(item){
+                var type = 'debug';
+                item = item.replace(LOG_TYPE_REG, function(m, $1){
+                    type = LOG_VALUE_MAP[$1] || type;
+                    return '';
+                });
+                self.emit(type, item);
+                if(self.log.hasOwnProperty(type)){
+                    self.log[type].push(item);
+                }
+            }
+        });
+    };
+
+
+}
 
 // inherit from EventEmitter
 util.inherits(Monitor, EventEmitter);
-
-/**
- * init log
- * @private
- */
-Monitor.prototype._initLog = function(){
-    var log = this.log = {};
-    _.map(_.log, function(key){
-        log[key.toLowerCase()] = [];
-    });
-};
-
-/**
- * capture webpage and diff
- * @param {Function} callback
- * @param {Boolean} noDiff
- * @returns {*}
- */
-Monitor.prototype.capture = function(callback, noDiff){
-    if(this.running) return;
-    this.running = true;
-    var self = this;
-    var type = _.mode.CAPTURE;
-    if(!noDiff){
-        type |= _.mode.DIFF;
-    }
-    this._initLog();
-    return this._phantom(
-        [
-            PHANTOMJS_SCRIPT_FILE,
-            type,
-            this.url,
-            JSON.stringify(this.options)
-        ],
-        function(code, log){
-            // TODO with code
-            self.running = false;
-            callback.call(self, code, log);
-        }
-    );
-};
-
-/**
- * diff with two times
- * @param {Number|String|Date} left
- * @param {Number|String|Date} right
- * @param {Function} callback
- * @returns {*}
- */
-Monitor.prototype.diff = function(left, right, callback){
-    if(this.running) return;
-    this.running = true;
-    var self = this;
-    var type = _.mode.DIFF;
-    this._initLog();
-    if(_.is(left, 'Date')){
-        left = left.getDate();
-    }
-    if(_.is(right, 'Date')){
-        right = right.getDate();
-    }
-    return this._phantom(
-        [
-            PHANTOMJS_SCRIPT_FILE,
-            type, left, right,
-            JSON.stringify(this.options)
-        ],
-        function(code, log){
-            // TODO with code
-            self.running = false;
-            callback.call(self, code, log);
-        }
-    );
-};
-
-/**
- * spawn phantom
- * @param {Array} args
- * @param {Function} callback
- * @returns {*}
- * @private
- */
-Monitor.prototype._phantom = function(args, callback){
-    var arr = [];
-    _.map(this.options.cli, function(key, value){
-        arr.push(key + '=' + value);
-    });
-    this.emit('debug', 'cli arguments: ' + JSON.stringify(arr));
-    arr = arr.concat(args);
-    var proc = spawn(binPath, arr);
-    proc.stdout.on('data', this._parseLog.bind(this));
-    proc.stderr.on('data', this._parseLog.bind(this));
-    proc.on('exit', function(code){
-        callback(code);
-    });
-    return proc;
-};
-
-/**
- * parse log from phantom
- * @param {String} msg
- * @private
- */
-Monitor.prototype._parseLog = function(msg){
-    var self = this;
-    String(msg || '').split(LOG_SPLIT_REG).forEach(function(item){
-        item = item.trim();
-        if(item){
-            var type = 'debug';
-            item = item.replace(LOG_TYPE_REG, function(m, $1){
-                type = LOG_VALUE_MAP[$1] || type;
-                return '';
-            });
-            self.emit(type, item);
-            if(self.log.hasOwnProperty(type)){
-                self.log[type].push(item);
-            }
-        }
-    });
-};
 
 module.exports = Monitor;

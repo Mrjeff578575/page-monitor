@@ -192,12 +192,16 @@ module.exports = function(TOKEN, data){
                 }
                 node.child = [];
                 if(node.name === 'img'){
+                    var imgSrc = elem.getAttribute('src');
+                    var newImg = new Image();
+                    newImg.setAttribute('crossOrigin', 'anonymous');
+                    newImg.src = imgSrc;
                     if(!(IGNORE_TEXT_SELECTORS && elem.webkitMatchesSelector(IGNORE_TEXT_SELECTORS))){
                         var canvas = document.createElement('canvas');
                         canvas.width = elem.offsetWidth;
                         canvas.height = elem.offsetHeight;
                         var ctx = canvas.getContext('2d');
-                        ctx.drawImage(elem, 0, 0);
+                        ctx.drawImage(newImg, 0, 0);
                         // not ignore text
                         node.child.push({
                             name: '#',

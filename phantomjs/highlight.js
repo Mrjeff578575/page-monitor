@@ -16,7 +16,6 @@ module.exports = function(token, diff, lOffset, rOffset, opt){
     function px(val){
         return val + 'px';
     }
-
     var CHANGE_TYPE = opt.changeType;
     var CHANGE_STYLE = {};
     CHANGE_STYLE.ADD = opt.highlight.add;
