@@ -2,6 +2,7 @@ const puppeteer = require('puppeteer');
 const devices = require('puppeteer/DeviceDescriptors');
 const iPhone = devices['iPhone 6'];
 const fs = require('fs');
+const URL = require('url');
 
 const _ = require('../util.js');
 const diff = require('./diff.js');
@@ -61,12 +62,14 @@ class M {
      * get info of the latest save
      * @returns {object|boolean}
      */
-    getLatestTree() {
+    getLatestTree(url) {
+        const urlPath = URL.parse(url).pathname.replace('/', '_');
         return new Promise((resolve, reject) => {
             if(fs.existsSync(this.latest)){
                 var time = fs.readFileSync(this.latest).toString().trim();
                 if(time){
-                    var tree = this.root + '/' + time + '/' + TREE_FILENAME;
+                    // TODO: 支持多页面
+                    var tree = this.root + '/' + time + '/' + urlPath + '_' + TREE_FILENAME;
                     if(fs.existsSync(tree)){
                         var content = fs.readFileSync(tree).toString().trim();
                         resolve({
@@ -107,13 +110,12 @@ class M {
      * @param {string|number} time
      * @returns {{time: number, dir: string, screenshot: string}}
      */
-    save(page, url, tree, rect, time) {
+    save(page, url, tree, rect) {
         return new Promise((resolve, reject) => {
             time = time || Date.now();
             if(_.is(tree, 'Object')){
                 tree = JSON.stringify(tree);
             }
-            //const filePath = url.replace('/', '').split('.').join('');
             var dir = this.root + '/' + time;
             console.log('DIR: ', dir);
             if (fs.existsSync(dir)) {
@@ -124,34 +126,30 @@ class M {
                 if (!err) {
                     log('save capture [' + dir + ']');
                     const opt = this.getRenderOptions();
-                    const screenshot = dir + '/' + SCREENSHOT_FILENAME + '.' + opt.ext;
+                    const urlPath = URL.parse(url).pathname.replace(/\//g, '_');
+                    const screenshot = `${dir}/${urlPath}_${SCREENSHOT_FILENAME}.${opt.ext}`;
                     log('screenshot [' + screenshot + ']');
                     log(`rect [${rect}]`);
-                    try {
-                        await page.evaluate(function(){
-                            const elem = document.documentElement;
-                            elem.style.backgroundColor = '#fff';
-                        });
-                        //capture
-                        await page.screenshot({
-                            path: screenshot,
-                            clip: {
-                                x: rect[0],
-                                y: rect[1],
-                                width: rect[2],
-                                height: rect[3]
-                            }
-                        });
-                        fs.writeFileSync(dir + '/' + TREE_FILENAME, tree);
-                        fs.writeFileSync(dir + '/' + INFO_FILENAME, JSON.stringify({
-                            time: time,
-                            url: url
-                        }));
-                        fs.writeFileSync(this.latest, time);
-                    } catch (e) {
-                        console.log(e)
-                        reject(e);
-                    }
+                    await page.evaluate(function(){
+                        const elem = document.documentElement;
+                        elem.style.backgroundColor = '#fff';
+                    });
+                    //capture
+                    await page.screenshot({
+                        path: screenshot,
+                        clip: {
+                            x: rect[0],
+                            y: rect[1],
+                            width: rect[2],
+                            height: rect[3]
+                        }
+                    });
+                    fs.writeFileSync(dir + '/' + urlPath + '_' + TREE_FILENAME, tree);
+                    fs.writeFileSync(dir + '/' + urlPath + '_' + INFO_FILENAME, JSON.stringify({
+                        time: time,
+                        url: url
+                    }));
+                    fs.writeFileSync(this.latest, time);
                     resolve({
                         time: time,
                         dir: dir,
@@ -187,6 +185,18 @@ class M {
         }
         const html = __dirname + '/' + HIGHLIGHT_HTML_FILENAME;
         let url = 'file://' + '' + html + '?';
+        // TODO: 利用Resemble.js进行像素对比
+        // var diff = resemble(lScreenshot).compareTo(rScreenshot).ignoreColors().onComplete(function(data){
+        //     console.log(data);
+        //     /*
+        //     {
+        //     misMatchPercentage : 100, // %
+        //     isSameDimensions: true, // or false
+        //     dimensionDifference: { width: 0, height: -1 }, // defined if dimensions are not the same
+        //     getImageDataUrl: function(){}
+        //     }
+        //     */
+        // });
         url += [
             lScreenshot,
             rScreenshot,
@@ -222,7 +232,7 @@ class M {
      * @param {string} url
      * @param {boolean} needDiff
      */
-    capture(url, needDiff) {
+    async capture(url, needDiff) {
         if(needDiff) log('need diff');
         const self = this;
         const options = self.options;
@@ -230,23 +240,22 @@ class M {
         this.createPage(url, async (page) => {
             log('loaded: ' + url);
             log('walk tree');
-            const right = await page.evaluate(walk, self.token, options.walk);    //walk tree
-            if (!right.rect) {
-                this.close(page);
-            }
+            const right = await page.evaluate(walk, self.token, options.walk);
             const rect = right.rect;
             const json = JSON.stringify(right);
-            const latest = await self.getLatestTree();
+            const latest = await self.getLatestTree(url);
             if(latest.content === json){
+                // no change, not capture and diff
                 log('no change');
             } else if(latest === false || !needDiff) {
+                // only capture
                 await this.save(page, url, json, rect);
             } else {
+                // diff with lastest capture
                 var left = JSON.parse(latest.content);
                 right = JSON.parse(json);
                 var ret = diff(left, right, options.diff);
                 if(ret.length){
-                    var now = Date.now();
                     var info = await this.save(page, url, json, rect, now);
                     var lOffset = { x: left.rect[0], y: left.rect[1] };
                     var rOffset = { x: right.rect[0], y: right.rect[1] };
@@ -258,7 +267,7 @@ class M {
                     log('no change');
                 }
             }
-            this.close(page);
+            await this.close(page);
         });
     }
 
@@ -311,10 +320,10 @@ class M {
     }
 
     async close(page) {
+        // only close page
         try {
             console.log('close page and browser');
             await page.close();
-            await this.browser.close();
         } catch (e) {
             console.log(e);
         }

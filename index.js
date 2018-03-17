@@ -9,7 +9,6 @@ var PHANTOMJS_SCRIPT_DIR = path.join(__dirname, 'phantomjs');
 var PHANTOMJS_SCRIPT_FILE = path.join(PHANTOMJS_SCRIPT_DIR, 'index.js');
 var _ = require('./util.js');
 var EventEmitter = require('./NewEventEmitter.js');
-var _exists = fs.existsSync || path.existsSync;
 const puppeteer = require('puppeteer');
 const M = require('./phantomjs/index.js');
 
@@ -32,14 +31,14 @@ function mkdirp(path, mode){
         //511 === 0777
         mode = 511 & (~process.umask());
     }
-    if(_exists(path)) return;
+    if(fs.existsSync(path)) return;
     path.replace(/\\/g, '/').split('/').reduce(function(prev, next) {
-        if(prev && !_exists(prev)) {
+        if(prev && !fs.existsSync(prev)) {
             fs.mkdirSync(prev, mode);
         }
         return prev + '/' + next;
     });
-    if(!_exists(path)) {
+    if(!fs.existsSync(path)) {
         fs.mkdirSync(path, mode);
     }
 }
@@ -253,11 +252,11 @@ class Monitor {
     constructor(options) {
         EventEmitter.call(this);
         options = mergeSettings(options);
-        this.url = options.url;
+        this.urls = options.urls;
         this.running = false;
         options.path.dir = path.join(
             options.path.root || DEFAULT_DATA_DIRNAME,
-            format(options.path.format, options.url, Url.parse(options.url))
+            format(options.path.format, options.url, Url.parse(options.urls[0]))
         );
         if(!fs.existsSync(options.path.dir)){
             mkdirp(options.path.dir);
@@ -294,7 +293,7 @@ class Monitor {
         return this.run(
             [
                 type,
-                this.url,
+                this.urls,
                 JSON.stringify(this.options)
             ],
             function(code, log){
@@ -341,24 +340,36 @@ class Monitor {
      * @private
      */
     async run(args, callback){
-        var arr = [];
-        // _.map(this.options.cli, function(key, value){
-        //     arr.push(key + '=' + value);
-        // });
-        arr = arr.concat(args);
         const mode = parseInt(args[0]);
         log('mode: ' + mode.toString(2));
-        puppeteer.launch().then(async browser => {
-            if(mode & _.mode.CAPTURE){ 
-                // capture
-                let m = new M(JSON.parse(args[2]), browser);
-                m.capture(args[1], (mode & _.mode.DIFF) > 0);
-            } else if(mode & _.mode.DIFF){ 
-                // diff only
-                let m = new M(JSON.parse(args[3]), browser);
-                m.diff(args[1], args[2]);
-            }
-        });
+        try {
+            puppeteer.launch().then(async browser => {
+                if(mode & _.mode.CAPTURE){ 
+                    // capture
+                    let m = new M(JSON.parse(args[2]), browser);
+                    if (Array.isArray(this.urls)) {
+                        const captures = this.urls.map((url, index) => {
+                            return new Promise(async (resolve, reject) => {
+                                await m.capture(url, (mode & _.mode.DIFF) > 0);
+                            })
+                        })
+                        Promise.all(captures).then(async () => {
+                            console.log('####')
+                            await browser.close(); 
+                        })
+                    } else {
+                        throw new TypeError('urls must be array');
+                    }
+                } else if(mode & _.mode.DIFF){ 
+                    // diff only
+                    let m = new M(JSON.parse(args[3]), browser);
+                    m.diff(args[1], args[2]);
+                }
+            });
+        } catch (e) {
+            console.log(e)
+        }
+
 
         
         //const childProcess = await browser.process();
