@@ -348,9 +348,10 @@ class Monitor {
                     // capture
                     let m = new M(JSON.parse(args[2]), browser);
                     if (Array.isArray(this.urls)) {
+                        const time = Date.now();
                         const captures = this.urls.map((url, index) => {
                             return new Promise(async (resolve, reject) => {
-                                await m.capture(url, (mode & _.mode.DIFF) > 0);
+                                await m.capture(url, (mode & _.mode.DIFF) > 0, time);
                             })
                         })
                         Promise.all(captures).then(async () => {

@@ -3,6 +3,7 @@ const devices = require('puppeteer/DeviceDescriptors');
 const iPhone = devices['iPhone 6'];
 const fs = require('fs');
 const URL = require('url');
+const log = require('./log.js');
 
 const _ = require('../util.js');
 const diff = require('./diff.js');
@@ -21,15 +22,6 @@ const SCREENSHOT_FILENAME = 'screenshot';
 const INFO_FILENAME = 'info.json';
 const TREE_FILENAME = 'tree.json';
 const HIGHLIGHT_HTML_FILENAME = 'highlight.html';
-/**
- * log
- * @param {string} msg
- * @param {number} type
- */
-function log(msg, type) {
-    type = type || _.log.DEBUG;
-    console.log(type + msg);
-};
 
 const FORMAT_MAP = {
     png  : 'png',
@@ -110,56 +102,48 @@ class M {
      * @param {string|number} time
      * @returns {{time: number, dir: string, screenshot: string}}
      */
-    save(page, url, tree, rect) {
-        return new Promise((resolve, reject) => {
-            time = time || Date.now();
+    save(page, url, tree, rect, time) {
+        return new Promise(async (resolve, reject) => {
             if(_.is(tree, 'Object')){
                 tree = JSON.stringify(tree);
             }
             var dir = this.root + '/' + time;
-            console.log('DIR: ', dir);
             if (fs.existsSync(dir)) {
                 reject('file exits');
                 return;
             }
-            fs.mkdir(dir, async (err) => {
-                if (!err) {
-                    log('save capture [' + dir + ']');
-                    const opt = this.getRenderOptions();
-                    const urlPath = URL.parse(url).pathname.replace(/\//g, '_');
-                    const screenshot = `${dir}/${urlPath}_${SCREENSHOT_FILENAME}.${opt.ext}`;
-                    log('screenshot [' + screenshot + ']');
-                    log(`rect [${rect}]`);
-                    await page.evaluate(function(){
-                        const elem = document.documentElement;
-                        elem.style.backgroundColor = '#fff';
-                    });
-                    //capture
-                    await page.screenshot({
-                        path: screenshot,
-                        clip: {
-                            x: rect[0],
-                            y: rect[1],
-                            width: rect[2],
-                            height: rect[3]
-                        }
-                    });
-                    fs.writeFileSync(dir + '/' + urlPath + '_' + TREE_FILENAME, tree);
-                    fs.writeFileSync(dir + '/' + urlPath + '_' + INFO_FILENAME, JSON.stringify({
-                        time: time,
-                        url: url
-                    }));
-                    fs.writeFileSync(this.latest, time);
-                    resolve({
-                        time: time,
-                        dir: dir,
-                        screenshot: screenshot
-                    });
-                } else {
-                    throw new Error(`Error: [${err}] unable to make directory [${dir}]`);
-                    reject(err);
+            fs.mkdirSync(dir);
+            log(`SAVE CAPTURE [${dir}]`);
+            const opt = this.getRenderOptions();
+            const urlPath = URL.parse(url).pathname.replace(/\//g, '_');
+            const screenshot = `${dir}/${urlPath}_${SCREENSHOT_FILENAME}.${opt.ext}`;
+            log('SCREENSHOT [' + screenshot + ']');
+            log(`RECT [${rect}]`);
+            await page.evaluate(function(){
+                const elem = document.documentElement;
+                elem.style.backgroundColor = '#fff';
+            });
+            //capture
+            await page.screenshot({
+                path: screenshot,
+                clip: {
+                    x: rect[0],
+                    y: rect[1],
+                    width: rect[2],
+                    height: rect[3]
                 }
-            })
+            });
+            fs.writeFileSync(dir + '/' + urlPath + '_' + TREE_FILENAME, tree);
+            fs.writeFileSync(dir + '/' + urlPath + '_' + INFO_FILENAME, JSON.stringify({
+                time: time,
+                url: url
+            }));
+            fs.writeFileSync(this.latest, time);
+            resolve({
+                time: time,
+                dir: dir,
+                screenshot: screenshot
+            });
         })
     }
 
@@ -204,10 +188,10 @@ class M {
             _.getTimeString(right)
         ].join('|');
         log('start highlight [' + url + ']');
-        let self = this, options = self.options;
+        const options = this.options;
         this.createPage(url, async (page) => {
             log('highlight done');
-            const count = await page.evaluate(highlight, self.token, diff, lOffset, rOffset, options.diff);
+            const count = await page.evaluate(highlight, this.token, diff, lOffset, rOffset, options.diff);
             var info = {
                 left,
                 right,
@@ -232,43 +216,44 @@ class M {
      * @param {string} url
      * @param {boolean} needDiff
      */
-    async capture(url, needDiff) {
-        if(needDiff) log('need diff');
-        const self = this;
-        const options = self.options;
-        log('loading: ' + url);
-        this.createPage(url, async (page) => {
-            log('loaded: ' + url);
-            log('walk tree');
-            const right = await page.evaluate(walk, self.token, options.walk);
-            const rect = right.rect;
-            const json = JSON.stringify(right);
-            const latest = await self.getLatestTree(url);
-            if(latest.content === json){
-                // no change, not capture and diff
-                log('no change');
-            } else if(latest === false || !needDiff) {
-                // only capture
-                await this.save(page, url, json, rect);
+    async capture(url, needDiff, time) {
+        if(needDiff) {
+            log('need diff');
+        }
+        const options = this.options;
+        log(`Loading Page: [${url}]`);
+        const page = await this.createPage(url);
+        log(`Loadded Page: [${url}]`);
+        log('==== START WALK TREE====');
+        const right = await page.evaluate(walk, this.token, options.walk);
+        log('====  END  WALK TREE====');
+        const rect = right.rect;
+        const json = JSON.stringify(right);
+        const latest = await this.getLatestTree(url);
+        if(latest.content === json){
+            // no change, not capture and diff
+            log('No CHANGE');
+        } else if(latest === false || !needDiff) {
+            // only capture
+            await this.save(page, url, json, rect, time);
+        } else {
+            // diff with lastest capture
+            const left = JSON.parse(latest.content);
+            right = JSON.parse(json);
+            const ret = diff(left, right, options.diff);
+            if(ret.length){
+                var info = await this.save(page, url, json, rect, now);
+                var lOffset = { x: left.rect[0], y: left.rect[1] };
+                var rOffset = { x: right.rect[0], y: right.rect[1] };
+                this.highlight(latest.time, now, ret, lOffset, rOffset, function(diff){
+                    info.diff = diff;
+                    log(JSON.stringify(info), _.log.INFO);
+                });
             } else {
-                // diff with lastest capture
-                var left = JSON.parse(latest.content);
-                right = JSON.parse(json);
-                var ret = diff(left, right, options.diff);
-                if(ret.length){
-                    var info = await this.save(page, url, json, rect, now);
-                    var lOffset = { x: left.rect[0], y: left.rect[1] };
-                    var rOffset = { x: right.rect[0], y: right.rect[1] };
-                    self.highlight(latest.time, now, ret, lOffset, rOffset, function(diff){
-                        info.diff = diff;
-                        log(JSON.stringify(info), _.log.INFO);
-                    });
-                } else {
-                    log('no change');
-                }
+                log('No CHANGE');
             }
-            await this.close(page);
-        });
+        }
+        await this.close(page);
     }
 
     /**
@@ -289,9 +274,8 @@ class M {
      * @param {string} left
      * @param {string} right
      */
-    diff(left, right) {
-        var self = this;
-        var options = self.options;
+    async diff(left, right) {
+        var options = this.options;
         var lTree = this.getTree(left);
         var rTree = this.getTree(right);
         try {
@@ -300,7 +284,7 @@ class M {
                 if(ret.length){
                     var lOffset = { x: lTree.rect[0], y: lTree.rect[1] };
                     var rOffset = { x: rTree.rect[0], y: rTree.rect[1] };
-                    self.highlight(left, right, ret, lOffset, rOffset, function(diff){
+                    this.highlight(left, right, ret, lOffset, rOffset, function(diff){
                         var info = { diff };
                         log(JSON.stringify(info), _.log.INFO);
                     });
@@ -315,19 +299,7 @@ class M {
         } catch (e){
             console.log(e)
         }
-
-        this.close(page);
-    }
-
-    async close(page) {
-        // only close page
-        try {
-            console.log('close page and browser');
-            await page.close();
-        } catch (e) {
-            console.log(e);
-        }
-
+        await this.close(page);
     }
     
     /**
@@ -335,28 +307,48 @@ class M {
      * @param {string} url
      * @param {Function} onload
      */
-    async createPage(url, callback){
-        const options = this.options.page.viewportOpts || {};
-        const page = await this.browser.newPage();
-        await page.emulate(iPhone);
-        await page.goto(url);
-        page.on('error', (msg, trace) => {
-            var msgStack = [ msg ];
-            if (trace && trace.length) {
-                msgStack.push('TRACE:');
-                trace.forEach(function(t) {
-                    msgStack.push(' -> ' + (t.file || t.sourceURL) + ': ' + t.line + (t.function ? ' (in function ' + t.function +')' : ''));
-                });
-            }
-            log(msgStack.join('\n'), _.log.ERROR);
-            this.close(page);
+    createPage(url){
+        return new Promise(async (resolve, reject) => {
+            const options = this.options.page.viewportOpts || {};
+            const page = await this.browser.newPage();
+            await page.emulate(iPhone);
+            await page.goto(url);
+            await this.attachEventOnPage(page)
+            resolve(page)
         });
-        page.on('console', (msg) => {
-            for (let i = 0; i < msg.args().length; ++i) {
-                console.log(`${i}: ${msg.args()[i]}`);
-            }
-        });
-        callback(page);
+    }
+
+    attachEventOnPage(page) {
+        return new Promise((resolve, reject) => {
+            page.on('error', async (msg, trace) => {
+                var msgStack = [ msg ];
+                if (trace && trace.length) {
+                    msgStack.push('TRACE:');
+                    trace.forEach(function(t) {
+                        msgStack.push(' -> ' + (t.file || t.sourceURL) + ': ' + t.line + (t.function ? ' (in function ' + t.function +')' : ''));
+                    });
+                }
+                log(msgStack.join('\n'), _.log.ERROR);
+                await this.close(page);
+            });
+            page.on('console', (msg) => {
+                for (let i = 0; i < msg.args().length; ++i) {
+                    console.log(`${i}: ${msg.args()[i]}`);
+                }
+            });
+            resolve();
+        })
+    }
+
+    async close(page) {
+        // only close page
+        try {
+            log('close page and browser');
+            await page.close();
+        } catch (e) {
+            log(`ERROR: ${e}`);
+        }
+
     }
 }
 module.exports = M;

@@ -13,6 +13,7 @@
         "diff"
     ],
     "dependencies": {
+        "chalk": "^2.3.2",
         "puppeteer": "^1.1.1"
     },
     "repository": {
