@@ -1,18 +1,27 @@
 const Monitor = require('./index.js');
-var monitor = new Monitor({
-    urls: ['https://store.meituan.com/home', 'https://store.meituan.com/productcategory/Q2F0ZWdvcnk6OA==']
+process.on('unhandledRejection', (reason, p) => {
+    console.error('检测到有未catch到的Promise: ', p, ' reason: ', reason);
 });
+
+var monitor = new Monitor({
+    protocol: 'http',
+    hosts: ['store.meituan.com', 'store.sjst.test.sankuai.com'],
+    pathToCompare: ['/home']
+});
+
 monitor.on('debug', function (data) {
     console.log('[DEBUG] ' + data);
 });
+
 monitor.on('error', function (data) {
     console.error('[ERROR] ' + data);
 });
-monitor.capture(function(code){
+
+// monitor.capture(function(code){
+//     console.log('[DONE] exit [' + code + ']');
+// }, true);
+
+monitor.diff(1526009382481, function(code){
     console.log(monitor.log.info); // diff result
     console.log('[DONE] exit [' + code + ']');
-}, true);
-// monitor.diff(1521169517821, 1521170762927, function(code){
-//     console.log(monitor.log.info); // diff result
-//     console.log('[DONE] exit [' + code + ']');
-// });
+});

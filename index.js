@@ -12,6 +12,9 @@ var EventEmitter = require('./NewEventEmitter.js');
 const puppeteer = require('puppeteer');
 const M = require('./phantomjs/index.js');
 
+const CAPTURE_MODE = 1;
+const DIFF_MODE = 2;
+
 /**
  * log
  * @param {string} msg
@@ -67,17 +70,12 @@ function base64(data){
  */
 function mergeSettings(settings){
     var defaultSettings = {
-        // webpage settings
-        // @see https://github.com/GoogleChrome/puppeteer/blob/master/docs/api.md#pagesetviewportviewport
+        protocol: 'http',
         page: {
             viewportOpts: {
                 width: 375,
                 height: 667,
                 isMobile: true,
-            },
-            settings: {
-                resourceTimeout: 20000,
-                userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 7_0 like Mac OS X; en-us) AppleWebKit/537.51.1 (KHTML, like Gecko) Version/7.0 Mobile/11A465 Safari/9537.53'
             }
         },
         walk: {
@@ -173,10 +171,7 @@ function mergeSettings(settings){
             // save path format, it can be a string
             // like this: '{hostname}/{port}/{pathname}/{query}{hash}'
             format: function(url, opt){
-                return [
-                    opt.hostname, (opt.port ? '-' + opt.port : ''), '/',
-                    base64(opt.path + (opt.hash || '')).replace(/\//g, '.')
-                ].join('');
+                return opt.hostname;
             }
         }
     };
@@ -230,8 +225,15 @@ function format(pattern, url, opt){
     }
 }
 
-var LOG_VALUE_MAP ={};
-var logTypes = (function(){
+function Flattern(arr){
+    var newArr = arr.reduce(function(pre, cur){
+        return pre.concat(cur)
+    });
+    return newArr;
+}
+
+const LOG_VALUE_MAP ={};
+const logTypes = (function(){
     var types = [];
     _.map(_.log, function(key, value){
         LOG_VALUE_MAP[value] = key.toLowerCase();
@@ -239,8 +241,8 @@ var logTypes = (function(){
     });
     return types.join('|');
 })();
-var LOG_SPLIT_REG = new RegExp('(?:^|[\r\n]+)(?=' + logTypes + ')');
-var LOG_TYPE_REG = new RegExp('^(' + logTypes + ')');
+const LOG_SPLIT_REG = new RegExp('(?:^|[\r\n]+)(?=' + logTypes + ')');
+const LOG_TYPE_REG = new RegExp('^(' + logTypes + ')');
 
 class Monitor {
     /**
@@ -252,17 +254,18 @@ class Monitor {
     constructor(options) {
         EventEmitter.call(this);
         options = mergeSettings(options);
-        this.urls = options.urls;
+        this.hosts = options.hosts;
+        this.protocol = options.protocol;
+        this.pathToCompare = options.pathToCompare;
         this.running = false;
-        options.path.dir = path.join(
-            options.path.root || DEFAULT_DATA_DIRNAME,
-            format(options.path.format, options.url, Url.parse(options.urls[0]))
-        );
-        if(!fs.existsSync(options.path.dir)){
-            mkdirp(options.path.dir);
-        }
+        this.hosts.forEach(host => {
+            const pathDir = path.join(DEFAULT_DATA_DIRNAME, host);
+            if(!fs.existsSync(pathDir)){
+                mkdirp(pathDir);
+            }
+        })
+        this.urls = Flattern(this.hosts.map(host => this.pathToCompare.map(p => this.protocol + '://' + host + p)));
         this.options = options;
-        this._initLog();
     }
     /**
      * init log
@@ -276,6 +279,7 @@ class Monitor {
     }
 
     /**
+     * TODO: need to capture multiple urls
      * capture webpage and diff
      * @param {Function} callback
      * @param {Boolean} noDiff
@@ -284,20 +288,15 @@ class Monitor {
     capture(callback, noDiff) {
         if(this.running) return;
         this.running = true;
-        var self = this;
-        var type = _.mode.CAPTURE;
-        if(!noDiff){
-            type |= _.mode.DIFF;
-        }
+        const self = this;
         this._initLog();
         return this.run(
             [
-                type,
+                CAPTURE_MODE,
                 this.urls,
                 JSON.stringify(this.options)
             ],
             function(code, log){
-                // TODO with code
                 self.running = false;
                 callback.call(self, code, log);
             }
@@ -306,23 +305,22 @@ class Monitor {
 
 
     /**
+     * TODO: need change to diff two files or two times
      * diff with two times
      * @param {Number|String|Date} left
      * @param {Number|String|Date} right
      * @param {Function} callback
      * @returns {*}
      */
-    diff(left, right, callback) {
+    diff(time, callback) {
         if(this.running) return;
         this.running = true;
-        var self = this;
-        var type = _.mode.DIFF;
+        const self = this;
         this._initLog();
         return this.run( 
             [
-                type, 
-                left, 
-                right,
+                DIFF_MODE, 
+                time,
                 JSON.stringify(this.options)
             ],
             function(code, log){
@@ -333,7 +331,7 @@ class Monitor {
     }
 
     /**
-     * spawn phantom
+     * spawn chromeheadless
      * @param {Array} args
      * @param {Function} callback
      * @returns {*}
@@ -341,18 +339,16 @@ class Monitor {
      */
     async run(args, callback){
         const mode = parseInt(args[0]);
-        log('mode: ' + mode.toString(2));
+        log('mode: ' + mode);
         try {
             puppeteer.launch().then(async browser => {
-                if(mode & _.mode.CAPTURE){ 
+                if(mode === CAPTURE_MODE){ 
                     // capture
                     let m = new M(JSON.parse(args[2]), browser);
                     if (Array.isArray(this.urls)) {
                         const time = Date.now();
-                        const captures = this.urls.map((url, index) => {
-                            return new Promise(async (resolve, reject) => {
-                                await m.capture(url, (mode & _.mode.DIFF) > 0, time);
-                            })
+                        const captures = this.urls.map(async (url, index) => {
+                            return await m.capture(url, time);
                         })
                         Promise.all(captures).then(async () => {
                             console.log('####')
@@ -361,10 +357,10 @@ class Monitor {
                     } else {
                         throw new TypeError('urls must be array');
                     }
-                } else if(mode & _.mode.DIFF){ 
+                } else if(mode === DIFF_MODE){ 
                     // diff only
-                    let m = new M(JSON.parse(args[3]), browser);
-                    m.diff(args[1], args[2]);
+                    let m = new M(JSON.parse(args[2]), browser);
+                    m.diff(args[1]);
                 }
             });
         } catch (e) {
@@ -388,6 +384,8 @@ class Monitor {
 
     
     };
+
+    
 
     /**
      * parse log from phantom
