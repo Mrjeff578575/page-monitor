@@ -5,7 +5,7 @@ process.on('unhandledRejection', (reason, p) => {
 
 var monitor = new Monitor({
     protocol: 'http',
-    hosts: ['store.meituan.com', 'store.sjst.test.sankuai.com'],
+    hosts: ['store.meituan.com', 'store.meituan.com'],
     pathToCompare: ['/home']
 });
 
