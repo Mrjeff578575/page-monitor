@@ -5,8 +5,8 @@ process.on('unhandledRejection', (reason, p) => {
 
 var monitor = new Monitor({
     protocol: 'http',
-    hosts: ['store.meituan.com', 'store.meituan.com'],
-    pathToCompare: ['/home']
+    hosts: ['store.meituan.com', 'store.sjst.test.sankuai.com'],
+    pathToCompare: ['/home', '/cart', '/user']
 });
 
 monitor.on('debug', function (data) {
@@ -21,7 +21,7 @@ monitor.on('error', function (data) {
 //     console.log('[DONE] exit [' + code + ']');
 // }, true);
 
-monitor.diff(1526009382481, function(code){
+monitor.diff(1526032257109, function(code){
     console.log(monitor.log.info); // diff result
     console.log('[DONE] exit [' + code + ']');
 });

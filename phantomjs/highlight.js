@@ -58,10 +58,10 @@ module.exports = function(token, diff, lOffset, rOffset, opt){
                 div.style[key] = options[key];
             }
         }
-        div.style.left = px(rect[0] - offsetX);
-        div.style.top = px(rect[1] - offsetY);
-        div.style.width = px(rect[2]);
-        div.style.height = px(rect[3]);
+        div.style.left = px((rect[0] - offsetX) * 2);
+        div.style.top = px((rect[1] - offsetY) * 2);
+        div.style.width = px(rect[2] * 2);
+        div.style.height = px(rect[3] * 2);
         container.appendChild(div);
         return div;
     }
@@ -94,15 +94,15 @@ module.exports = function(token, diff, lOffset, rOffset, opt){
         switch (type){
             case CHANGE_TYPE.ADD:
                 count.add++;
-                highlightElement(node.rect, CHANGE_STYLE.ADD, rContainer, rOffset.x, rOffset.y);
+                highlightElement(node.rect, CHANGE_STYLE.ADD, rContainer, rOffset.x, rOffset.y, true);
                 break;
             case CHANGE_TYPE.REMOVE:
                 count.remove++;
-                highlightElement(node.rect, CHANGE_STYLE.REMOVE, lContainer, lOffset.x, lOffset.y);
+                highlightElement(node.rect, CHANGE_STYLE.REMOVE, lContainer, lOffset.x, lOffset.y, true);
                 break;
             case CHANGE_TYPE.TEXT:
                 count.text++;
-                highlightElement(node.rect, CHANGE_STYLE.TEXT, rContainer, rOffset.x, rOffset.y);
+                highlightElement(node.rect, CHANGE_STYLE.TEXT, rContainer, rOffset.x, rOffset.y, true);
                 break;
             default :
                 if(type & CHANGE_TYPE.STYLE){
@@ -111,7 +111,7 @@ module.exports = function(token, diff, lOffset, rOffset, opt){
                 if(type & CHANGE_TYPE.TEXT){
                     count.text++;
                 }
-                highlightElement(node.rect, CHANGE_STYLE.STYLE, rContainer, rOffset.x, rOffset.y);
+                highlightElement(node.rect, CHANGE_STYLE.STYLE, rContainer, rOffset.x, rOffset.y, true);
                 break;
         }
     });
